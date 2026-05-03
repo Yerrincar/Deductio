@@ -5,9 +5,26 @@ import (
 	"log"
 	"net/http"
 	"os"
+
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func main() {
+
+	opts := []kgo.Opt{
+		kgo.SeedBrokers("localhost:9092"),
+		kgo.DefaultProduceTopic("deployments"),
+		kgo.ClientID("user"),
+		kgo.ConsumerGroup("workers"),
+		kgo.ConsumeTopics("deployments"),
+	}
+
+	client, err := kgo.NewClient(opts...)
+	if err != nil {
+		log.Print("Failed to create Kafka client")
+	}
+	defer client.Close()
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Deductio"))
 	})

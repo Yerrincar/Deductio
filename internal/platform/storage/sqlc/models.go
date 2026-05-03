@@ -10,11 +10,11 @@ import (
 
 type Deployment struct {
 	DeploymentID    int32            `json:"deployment_id"`
-	Application     pgtype.Text      `json:"application"`
-	Version         pgtype.Text      `json:"version"`
-	Environment     pgtype.Text      `json:"environment"`
-	CurrentStatus   pgtype.Text      `json:"current_status"`
-	LastErrorStatus pgtype.Text      `json:"last_error_status"`
+	Application     string           `json:"application"`
+	Version         string           `json:"version"`
+	Environment     string           `json:"environment"`
+	CurrentStatus   string           `json:"current_status"`
+	LastErrorStatus string           `json:"last_error_status"`
 	CreatedAt       pgtype.Timestamp `json:"created_at"`
 	UpdatedAt       pgtype.Timestamp `json:"updated_at"`
 }
@@ -22,8 +22,8 @@ type Deployment struct {
 type DeploymentsAudit struct {
 	EventID      int32            `json:"event_id"`
 	DeploymentID int32            `json:"deployment_id"`
-	EventType    pgtype.Text      `json:"event_type"`
-	Message      pgtype.Text      `json:"message"`
-	User         pgtype.Text      `json:"user"`
+	EventType    string           `json:"event_type"`
+	Message      string           `json:"message"`
+	User         string           `json:"user"`
 	CreatedAt    pgtype.Timestamp `json:"created_at"`
 }

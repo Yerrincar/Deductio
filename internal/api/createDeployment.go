@@ -6,7 +6,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"sync"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 type DeploymentRequest struct {
@@ -36,10 +42,15 @@ type DeploymentHandler struct {
 	logger            Logger
 }
 
+type Kafka struct {
+	client *kgo.Client
+}
+
 type Handler struct {
 	Queries *db.Queries
 	DB      *sql.DB
 	dh      *DeploymentHandler
+	kafka   *Kafka
 }
 
 func NewDeploymentHandler(deployment DeploymentService, logger Logger, health HealthService) *DeploymentHandler {
@@ -55,17 +66,60 @@ func (h *HealthService) IsSystemReady() bool {
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return false
 	}
+	defer resp.Body.Close()
 	return true
 }
 
-func (h *Handler) CreateRequest(ctx context.Context, req DeploymentRequest) error {
-	//Future logic to create the Kafka Event and the insertion to db
+func (h *Handler) CreateRequest(ctx context.Context, req DeploymentRequest) (db.Deployment, error) {
+	creationTime := time.Now()
+	pgCreationTime := pgtype.Timestamp{
+		Time:  creationTime,
+		Valid: true,
+	}
+
+	deployementData, err := h.Queries.InsertDeployment(ctx, db.InsertDeploymentParams{
+		Application:     req.Application,
+		Version:         req.Version,
+		Environment:     req.Environment,
+		CurrentStatus:   "requested",
+		LastErrorStatus: "no error",
+		CreatedAt:       pgCreationTime,
+		UpdatedAt:       pgCreationTime,
+	})
+	if err != nil {
+		log.Print("Failed to insert deployment")
+		return db.Deployment{}, err
+	}
+	payload, _ := json.Marshal(deployementData)
+	//Idempotency in case publish fails needed
+	err = h.KafkaProducer(ctx, req, payload)
+	if err != nil {
+		log.Print("Error trying to produce deployment.request event")
+		return db.Deployment{}, err
+	}
 	fmt.Printf("Deploying %s v:%s to %s\n", req.Application, req.Version, req.Environment)
+	return deployementData, nil
+}
+
+func (h *Handler) KafkaProducer(ctx context.Context, req DeploymentRequest, data []byte) error {
+	//producers
+	var wg sync.WaitGroup
+	wg.Add(1)
+	record := &kgo.Record{Topic: "deployments", Value: data}
+	h.kafka.client.Produce(ctx, record, func(_ *kgo.Record, err error) {
+		defer wg.Done()
+		if err != nil {
+			log.Printf("record had a produce error: %v\n", err)
+			return
+		}
+	})
+	wg.Wait()
+
 	return nil
 }
 
 func (h *Handler) CreateDeployment(w http.ResponseWriter, r *http.Request) {
-	ctx := context.Background()
+	ctx := r.Context()
 
 	if !h.dh.health.IsSystemReady() {
 		http.Error(w, "Deployment tool is unavailable", http.StatusServiceUnavailable)
@@ -85,16 +139,12 @@ func (h *Handler) CreateDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	deployemntData, err := h.Queries.InsertBooks(ctx, db.InsertBooksParams{
-		Application: req.Application,
-		Version:     req.Version,
-		Environment: req.Environment,
-	})
-	//err := h.deploymentService.CreateRequest(req)
+	response, err := h.CreateRequest(ctx, req)
 	if err != nil {
 		http.Error(w, "Failed to create deployment", http.StatusInternalServerError)
+		return
 	}
-
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{"status": "deploymentStarted"})
+	json.NewEncoder(w).Encode(response)
 }

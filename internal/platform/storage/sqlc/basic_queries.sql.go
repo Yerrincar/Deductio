@@ -11,22 +11,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const insertBooks = `-- name: InsertBooks :many
+const insertDeployment = `-- name: InsertDeployment :one
 INSERT INTO deployments (application, version, environment, current_status, last_error_status, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING deployment_id, application, version, environment, current_status, last_error_status, created_at, updated_at
 `
 
-type InsertBooksParams struct {
-	Application     pgtype.Text      `json:"application"`
-	Version         pgtype.Text      `json:"version"`
-	Environment     pgtype.Text      `json:"environment"`
-	CurrentStatus   pgtype.Text      `json:"current_status"`
-	LastErrorStatus pgtype.Text      `json:"last_error_status"`
+type InsertDeploymentParams struct {
+	Application     string           `json:"application"`
+	Version         string           `json:"version"`
+	Environment     string           `json:"environment"`
+	CurrentStatus   string           `json:"current_status"`
+	LastErrorStatus string           `json:"last_error_status"`
 	CreatedAt       pgtype.Timestamp `json:"created_at"`
 	UpdatedAt       pgtype.Timestamp `json:"updated_at"`
 }
 
-func (q *Queries) InsertBooks(ctx context.Context, arg InsertBooksParams) ([]Deployment, error) {
-	rows, err := q.db.Query(ctx, insertBooks,
+func (q *Queries) InsertDeployment(ctx context.Context, arg InsertDeploymentParams) (Deployment, error) {
+	row := q.db.QueryRow(ctx, insertDeployment,
 		arg.Application,
 		arg.Version,
 		arg.Environment,
@@ -35,29 +35,16 @@ func (q *Queries) InsertBooks(ctx context.Context, arg InsertBooksParams) ([]Dep
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Deployment
-	for rows.Next() {
-		var i Deployment
-		if err := rows.Scan(
-			&i.DeploymentID,
-			&i.Application,
-			&i.Version,
-			&i.Environment,
-			&i.CurrentStatus,
-			&i.LastErrorStatus,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+	var i Deployment
+	err := row.Scan(
+		&i.DeploymentID,
+		&i.Application,
+		&i.Version,
+		&i.Environment,
+		&i.CurrentStatus,
+		&i.LastErrorStatus,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

@@ -9,3 +9,4 @@ sql:
         out: "internal/platform/storage/sqlc"
         sql_package: "pgx/v5"
         emit_json_tags: true
+        emit_pointers_for_null_types: true
