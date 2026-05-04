@@ -39,9 +39,9 @@ type HealthService struct {
 }
 
 type DeploymentHandler struct {
-	deploymentService DeploymentService
-	health            HealthService
-	logger            Logger
+	DeploymentService DeploymentService
+	Health            HealthService
+	Logger            Logger
 }
 
 type Kafka struct {
@@ -55,16 +55,23 @@ type Handler struct {
 	Kafka   *Kafka
 }
 
+func NewHealthHandler() *HealthService {
+	return &HealthService{
+		internalUrl: "http://localhost:8081/healthz",
+		HTTPClient:  &http.Client{},
+	}
+}
+
 func NewDeploymentHandler(deployment DeploymentService, logger Logger, health HealthService) *DeploymentHandler {
 	return &DeploymentHandler{
-		deploymentService: deployment,
-		logger:            logger,
-		health:            health,
+		DeploymentService: deployment,
+		Logger:            logger,
+		Health:            health,
 	}
 }
 
 func (h *HealthService) IsSystemReady() bool {
-	resp, err := h.HTTPClient.Get(h.internalUrl + "/healthz")
+	resp, err := h.HTTPClient.Get(h.internalUrl)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return false
 	}
@@ -109,17 +116,20 @@ func (h *Handler) CreateRequest(ctx context.Context, req DeploymentRequest, idem
 func (h *Handler) KafkaProducer(ctx context.Context, req DeploymentRequest, data []byte) error {
 	//producers
 	var wg sync.WaitGroup
+	var errProducer error
 	wg.Add(1)
 	record := &kgo.Record{Topic: "deployments", Value: data}
 	h.Kafka.Client.Produce(ctx, record, func(_ *kgo.Record, err error) {
 		defer wg.Done()
 		if err != nil {
 			log.Printf("record had a produce error: %v\n", err)
-			return
+			errProducer = err
 		}
 	})
 	wg.Wait()
-
+	if errProducer != nil {
+		return errProducer
+	}
 	return nil
 }
 
@@ -139,7 +149,7 @@ func (h *Handler) CreateDeployment(w http.ResponseWriter, r *http.Request) (*Dep
 		return nil, err
 	}
 
-	if !h.Dh.health.IsSystemReady() {
+	if !h.Dh.Health.IsSystemReady() {
 		http.Error(w, "Deployment tool is unavailable", http.StatusServiceUnavailable)
 		return nil, nil
 	}
