@@ -5,11 +5,12 @@
 package db
 
 import (
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Deployment struct {
-	DeploymentID    int32            `json:"deployment_id"`
+	DeploymentID    uuid.UUID        `json:"deployment_id"`
 	Application     string           `json:"application"`
 	Version         string           `json:"version"`
 	Environment     string           `json:"environment"`
@@ -17,11 +18,12 @@ type Deployment struct {
 	LastErrorStatus string           `json:"last_error_status"`
 	CreatedAt       pgtype.Timestamp `json:"created_at"`
 	UpdatedAt       pgtype.Timestamp `json:"updated_at"`
+	IdempotencyKey  uuid.UUID        `json:"idempotency_key"`
 }
 
 type DeploymentsAudit struct {
 	EventID      int32            `json:"event_id"`
-	DeploymentID int32            `json:"deployment_id"`
+	DeploymentID uuid.UUID        `json:"deployment_id"`
 	EventType    string           `json:"event_type"`
 	Message      string           `json:"message"`
 	User         string           `json:"user"`

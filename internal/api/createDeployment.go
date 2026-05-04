@@ -11,7 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -43,14 +45,14 @@ type DeploymentHandler struct {
 }
 
 type Kafka struct {
-	client *kgo.Client
+	Client *kgo.Client
 }
 
 type Handler struct {
 	Queries *db.Queries
-	DB      *sql.DB
-	dh      *DeploymentHandler
-	kafka   *Kafka
+	DB      *pgxpool.Pool
+	Dh      *DeploymentHandler
+	Kafka   *Kafka
 }
 
 func NewDeploymentHandler(deployment DeploymentService, logger Logger, health HealthService) *DeploymentHandler {
@@ -70,7 +72,7 @@ func (h *HealthService) IsSystemReady() bool {
 	return true
 }
 
-func (h *Handler) CreateRequest(ctx context.Context, req DeploymentRequest) (db.Deployment, error) {
+func (h *Handler) CreateRequest(ctx context.Context, req DeploymentRequest, idempotencyKey uuid.UUID) (db.Deployment, error) {
 	creationTime := time.Now()
 	pgCreationTime := pgtype.Timestamp{
 		Time:  creationTime,
@@ -85,13 +87,16 @@ func (h *Handler) CreateRequest(ctx context.Context, req DeploymentRequest) (db.
 		LastErrorStatus: "no error",
 		CreatedAt:       pgCreationTime,
 		UpdatedAt:       pgCreationTime,
+		IdempotencyKey:  idempotencyKey,
 	})
-	if err != nil {
-		log.Print("Failed to insert deployment")
-		return db.Deployment{}, err
+	if err == sql.ErrNoRows {
+		row, err := h.Queries.SelectDeployment(ctx, idempotencyKey)
+		if err != nil {
+			log.Print("This deployment row already exist in the database")
+		}
+		return row, err
 	}
 	payload, _ := json.Marshal(deployementData)
-	//Idempotency in case publish fails needed
 	err = h.KafkaProducer(ctx, req, payload)
 	if err != nil {
 		log.Print("Error trying to produce deployment.request event")
@@ -106,7 +111,7 @@ func (h *Handler) KafkaProducer(ctx context.Context, req DeploymentRequest, data
 	var wg sync.WaitGroup
 	wg.Add(1)
 	record := &kgo.Record{Topic: "deployments", Value: data}
-	h.kafka.client.Produce(ctx, record, func(_ *kgo.Record, err error) {
+	h.Kafka.Client.Produce(ctx, record, func(_ *kgo.Record, err error) {
 		defer wg.Done()
 		if err != nil {
 			log.Printf("record had a produce error: %v\n", err)
@@ -118,12 +123,30 @@ func (h *Handler) KafkaProducer(ctx context.Context, req DeploymentRequest, data
 	return nil
 }
 
-func (h *Handler) CreateDeployment(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+func (h *Handler) CreateDeployment(w http.ResponseWriter, r *http.Request) (*DeploymentRequest, error) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
 
-	if !h.dh.health.IsSystemReady() {
+	keyHeader := r.Header.Get("X-Idempotency-Key")
+	if keyHeader == "" {
+		http.Error(w, "X-Idempotency-Key header is required", http.StatusBadRequest)
+		return nil, nil
+	}
+
+	idempotencyKey, err := uuid.Parse(keyHeader)
+	if err != nil {
+		http.Error(w, "Invalid IdempotencyKey format", http.StatusBadRequest)
+		return nil, err
+	}
+
+	if !h.Dh.health.IsSystemReady() {
 		http.Error(w, "Deployment tool is unavailable", http.StatusServiceUnavailable)
-		return
+		return nil, nil
+	}
+
+	if r.Method != "POST" {
+		http.Error(w, "Only POST request allowed", http.StatusMethodNotAllowed)
+		return nil, nil
 	}
 
 	var req DeploymentRequest
@@ -132,19 +155,21 @@ func (h *Handler) CreateDeployment(w http.ResponseWriter, r *http.Request) {
 
 	if err := dec.Decode(&req); err != nil {
 		http.Error(w, "Error decoding the request", http.StatusBadRequest)
-		return
+		return nil, err
 	}
 	if req.Application == "" || req.Version == "" || req.Environment == "" {
 		http.Error(w, "Error decoding the request", http.StatusBadRequest)
-		return
+		return nil, nil
 	}
-
-	response, err := h.CreateRequest(ctx, req)
+	response, err := h.CreateRequest(ctx, req, idempotencyKey)
 	if err != nil {
 		http.Error(w, "Failed to create deployment", http.StatusInternalServerError)
-		return
+		return nil, err
 	}
+
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Idempotency-Key", keyHeader)
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(response)
+	return &req, nil
 }

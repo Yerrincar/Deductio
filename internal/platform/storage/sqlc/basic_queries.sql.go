@@ -8,11 +8,13 @@ package db
 import (
 	"context"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const insertDeployment = `-- name: InsertDeployment :one
-INSERT INTO deployments (application, version, environment, current_status, last_error_status, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING deployment_id, application, version, environment, current_status, last_error_status, created_at, updated_at
+INSERT INTO deployments (application, version, environment, current_status, last_error_status, created_at, updated_at, idempotency_key) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
+ON CONFLICT (idempotency_key) DO NOTHING RETURNING deployment_id, application, version, environment, current_status, last_error_status, created_at, updated_at, idempotency_key
 `
 
 type InsertDeploymentParams struct {
@@ -23,6 +25,7 @@ type InsertDeploymentParams struct {
 	LastErrorStatus string           `json:"last_error_status"`
 	CreatedAt       pgtype.Timestamp `json:"created_at"`
 	UpdatedAt       pgtype.Timestamp `json:"updated_at"`
+	IdempotencyKey  uuid.UUID        `json:"idempotency_key"`
 }
 
 func (q *Queries) InsertDeployment(ctx context.Context, arg InsertDeploymentParams) (Deployment, error) {
@@ -34,6 +37,7 @@ func (q *Queries) InsertDeployment(ctx context.Context, arg InsertDeploymentPara
 		arg.LastErrorStatus,
 		arg.CreatedAt,
 		arg.UpdatedAt,
+		arg.IdempotencyKey,
 	)
 	var i Deployment
 	err := row.Scan(
@@ -45,6 +49,28 @@ func (q *Queries) InsertDeployment(ctx context.Context, arg InsertDeploymentPara
 		&i.LastErrorStatus,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IdempotencyKey,
+	)
+	return i, err
+}
+
+const selectDeployment = `-- name: SelectDeployment :one
+SELECT deployment_id, application, version, environment, current_status, last_error_status, created_at, updated_at, idempotency_key FROM deployments WHERE idempotency_key = $1
+`
+
+func (q *Queries) SelectDeployment(ctx context.Context, idempotencyKey uuid.UUID) (Deployment, error) {
+	row := q.db.QueryRow(ctx, selectDeployment, idempotencyKey)
+	var i Deployment
+	err := row.Scan(
+		&i.DeploymentID,
+		&i.Application,
+		&i.Version,
+		&i.Environment,
+		&i.CurrentStatus,
+		&i.LastErrorStatus,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.IdempotencyKey,
 	)
 	return i, err
 }
