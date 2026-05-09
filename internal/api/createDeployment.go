@@ -1,6 +1,7 @@
 package deployment
 
 import (
+	"Deductio/internal/outbox"
 	db "Deductio/internal/platform/storage/sqlc"
 	"context"
 	"database/sql"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -44,6 +46,12 @@ type DeploymentHandler struct {
 	Logger            Logger
 }
 
+type DeploymentCreatedEvent struct {
+	DeploymentID uuid.UUID
+	Application  string
+	Version      string
+	Environment  string
+}
 type Kafka struct {
 	Client *kgo.Client
 }
@@ -80,13 +88,18 @@ func (h *HealthService) IsSystemReady() bool {
 }
 
 func (h *Handler) CreateRequest(ctx context.Context, req DeploymentRequest, idempotencyKey uuid.UUID) (db.Deployment, error) {
+	tx, err := h.DB.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return db.Deployment{}, nil
+	}
+	defer tx.Rollback(ctx)
 	creationTime := time.Now()
 	pgCreationTime := pgtype.Timestamp{
 		Time:  creationTime,
 		Valid: true,
 	}
 
-	deployementData, err := h.Queries.InsertDeployment(ctx, db.InsertDeploymentParams{
+	deploymentData, err := h.Queries.WithTx(tx).InsertDeployment(ctx, db.InsertDeploymentParams{
 		Application:     req.Application,
 		Version:         req.Version,
 		Environment:     req.Environment,
@@ -103,18 +116,40 @@ func (h *Handler) CreateRequest(ctx context.Context, req DeploymentRequest, idem
 		}
 		return row, err
 	}
-	payload, _ := json.Marshal(deployementData)
-	err = h.KafkaProducer(ctx, req, payload)
+
+	//outbox pattern
+
+	event := DeploymentCreatedEvent{
+		DeploymentID: deploymentData.DeploymentID,
+		Application:  deploymentData.Application,
+		Version:      deploymentData.Version,
+		Environment:  deploymentData.Environment,
+	}
+
+	msg, err := outbox.NewMessage(deploymentData.DeploymentID, "deployment", "deployment.created", event)
 	if err != nil {
-		log.Print("Error trying to produce deployment.request event")
+		log.Printf("Error trying to create new outbox msg: %v", err)
+		return db.Deployment{}, err
+	}
+
+	_, err = h.Queries.WithTx(tx).InsertOutboxRow(ctx, db.InsertOutboxRowParams{
+		msg.AggregateType, msg.AggregateID, msg.EventType, msg.Payload, msg.CreatedAt,
+	})
+	if err == sql.ErrNoRows {
+		if err != nil {
+			log.Print("This deployment row already exist in the database")
+		}
+		return db.Deployment{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
 		return db.Deployment{}, err
 	}
 	fmt.Printf("Deploying %s v:%s to %s\n", req.Application, req.Version, req.Environment)
-	return deployementData, nil
+	return deploymentData, nil
 }
 
 func (h *Handler) KafkaProducer(ctx context.Context, req DeploymentRequest, data []byte) error {
-	//producers
 	var wg sync.WaitGroup
 	var errProducer error
 	wg.Add(1)

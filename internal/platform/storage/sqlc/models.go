@@ -29,3 +29,13 @@ type DeploymentsAudit struct {
 	User         string           `json:"user"`
 	CreatedAt    pgtype.Timestamp `json:"created_at"`
 }
+
+type Outbox struct {
+	DeploymentID  int64              `json:"deployment_id"`
+	AggregateType string             `json:"aggregate_type"`
+	AggregateID   uuid.UUID          `json:"aggregate_id"`
+	EventType     string             `json:"event_type"`
+	Payload       []byte             `json:"payload"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	ProcessedAt   pgtype.Timestamptz `json:"processed_at"`
+}

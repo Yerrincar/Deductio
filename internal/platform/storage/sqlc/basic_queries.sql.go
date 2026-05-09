@@ -54,6 +54,39 @@ func (q *Queries) InsertDeployment(ctx context.Context, arg InsertDeploymentPara
 	return i, err
 }
 
+const insertOutboxRow = `-- name: InsertOutboxRow :one
+INSERT INTO outbox (aggregate_type, aggregate_id, event_type, payload, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING deployment_id, aggregate_type, aggregate_id, event_type, payload, created_at, processed_at
+`
+
+type InsertOutboxRowParams struct {
+	AggregateType string             `json:"aggregate_type"`
+	AggregateID   uuid.UUID          `json:"aggregate_id"`
+	EventType     string             `json:"event_type"`
+	Payload       []byte             `json:"payload"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) InsertOutboxRow(ctx context.Context, arg InsertOutboxRowParams) (Outbox, error) {
+	row := q.db.QueryRow(ctx, insertOutboxRow,
+		arg.AggregateType,
+		arg.AggregateID,
+		arg.EventType,
+		arg.Payload,
+		arg.CreatedAt,
+	)
+	var i Outbox
+	err := row.Scan(
+		&i.DeploymentID,
+		&i.AggregateType,
+		&i.AggregateID,
+		&i.EventType,
+		&i.Payload,
+		&i.CreatedAt,
+		&i.ProcessedAt,
+	)
+	return i, err
+}
+
 const selectDeployment = `-- name: SelectDeployment :one
 SELECT deployment_id, application, version, environment, current_status, last_error_status, created_at, updated_at, idempotency_key FROM deployments WHERE idempotency_key = $1
 `
@@ -71,6 +104,64 @@ func (q *Queries) SelectDeployment(ctx context.Context, idempotencyKey uuid.UUID
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.IdempotencyKey,
+	)
+	return i, err
+}
+
+const selectUnprocessedMsg = `-- name: SelectUnprocessedMsg :many
+SELECT deployment_id, aggregate_type, aggregate_id, event_type, payload FROM outbox WHERE processed_at IS NULL ORDER BY created_at
+LIMIT $1 FOR UPDATE SKIP LOCKED
+`
+
+type SelectUnprocessedMsgRow struct {
+	DeploymentID  int64     `json:"deployment_id"`
+	AggregateType string    `json:"aggregate_type"`
+	AggregateID   uuid.UUID `json:"aggregate_id"`
+	EventType     string    `json:"event_type"`
+	Payload       []byte    `json:"payload"`
+}
+
+func (q *Queries) SelectUnprocessedMsg(ctx context.Context, limit int32) ([]SelectUnprocessedMsgRow, error) {
+	rows, err := q.db.Query(ctx, selectUnprocessedMsg, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SelectUnprocessedMsgRow
+	for rows.Next() {
+		var i SelectUnprocessedMsgRow
+		if err := rows.Scan(
+			&i.DeploymentID,
+			&i.AggregateType,
+			&i.AggregateID,
+			&i.EventType,
+			&i.Payload,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateAsProcessed = `-- name: UpdateAsProcessed :one
+UPDATE outbox SET processed_at = NOW() WHERE deployment_id = $1 RETURNING deployment_id, aggregate_type, aggregate_id, event_type, payload, created_at, processed_at
+`
+
+func (q *Queries) UpdateAsProcessed(ctx context.Context, deploymentID int64) (Outbox, error) {
+	row := q.db.QueryRow(ctx, updateAsProcessed, deploymentID)
+	var i Outbox
+	err := row.Scan(
+		&i.DeploymentID,
+		&i.AggregateType,
+		&i.AggregateID,
+		&i.EventType,
+		&i.Payload,
+		&i.CreatedAt,
+		&i.ProcessedAt,
 	)
 	return i, err
 }

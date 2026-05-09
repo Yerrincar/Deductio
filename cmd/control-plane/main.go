@@ -2,6 +2,8 @@ package main
 
 import (
 	deployment "Deductio/internal/api"
+	"Deductio/internal/kafka"
+	"Deductio/internal/outbox"
 	db "Deductio/internal/platform/storage/sqlc"
 	"context"
 	"fmt"
@@ -15,7 +17,8 @@ import (
 )
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	appCtx := context.Background()
+	setupCtx, cancel := context.WithTimeout(appCtx, 10*time.Second)
 	defer cancel()
 
 	client, err := kgo.NewClient(
@@ -29,7 +32,7 @@ func main() {
 	defer client.Close()
 
 	dsn := getEnv("DSN", "")
-	dbPool, err := pgxpool.New(ctx, dsn)
+	dbPool, err := pgxpool.New(setupCtx, dsn)
 	if err != nil {
 		log.Fatalf("Failed to connect to Postgres: %v", err)
 	}
@@ -43,6 +46,10 @@ func main() {
 		Dh:      dh,
 		Kafka:   &deployment.Kafka{Client: client},
 	}
+
+	publisher := kafka.NewKafkaPublisher(client)
+	relay := outbox.NewRelay(h.DB, publisher)
+	go relay.Start(appCtx)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Deductio"))
