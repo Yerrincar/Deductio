@@ -1,0 +1,6 @@
+applications:
+  example-app:
+    image:
+      repository: github.com/Yerrincar/example-app/
+      tag: "1.0"
+    replicas: 2

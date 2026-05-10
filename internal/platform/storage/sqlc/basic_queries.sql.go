@@ -87,12 +87,50 @@ func (q *Queries) InsertOutboxRow(ctx context.Context, arg InsertOutboxRowParams
 	return i, err
 }
 
-const selectDeployment = `-- name: SelectDeployment :one
+const selectDeploymentConsumerInfo = `-- name: SelectDeploymentConsumerInfo :one
+SELECT application, version, environment FROM deployments WHERE deployment_id = $1
+`
+
+type SelectDeploymentConsumerInfoRow struct {
+	Application string `json:"application"`
+	Version     string `json:"version"`
+	Environment string `json:"environment"`
+}
+
+func (q *Queries) SelectDeploymentConsumerInfo(ctx context.Context, deploymentID uuid.UUID) (SelectDeploymentConsumerInfoRow, error) {
+	row := q.db.QueryRow(ctx, selectDeploymentConsumerInfo, deploymentID)
+	var i SelectDeploymentConsumerInfoRow
+	err := row.Scan(&i.Application, &i.Version, &i.Environment)
+	return i, err
+}
+
+const selectDeploymentDepKey = `-- name: SelectDeploymentDepKey :one
 SELECT deployment_id, application, version, environment, current_status, last_error_status, created_at, updated_at, idempotency_key FROM deployments WHERE idempotency_key = $1
 `
 
-func (q *Queries) SelectDeployment(ctx context.Context, idempotencyKey uuid.UUID) (Deployment, error) {
-	row := q.db.QueryRow(ctx, selectDeployment, idempotencyKey)
+func (q *Queries) SelectDeploymentDepKey(ctx context.Context, idempotencyKey uuid.UUID) (Deployment, error) {
+	row := q.db.QueryRow(ctx, selectDeploymentDepKey, idempotencyKey)
+	var i Deployment
+	err := row.Scan(
+		&i.DeploymentID,
+		&i.Application,
+		&i.Version,
+		&i.Environment,
+		&i.CurrentStatus,
+		&i.LastErrorStatus,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.IdempotencyKey,
+	)
+	return i, err
+}
+
+const selectDeploymentIdKey = `-- name: SelectDeploymentIdKey :one
+SELECT deployment_id, application, version, environment, current_status, last_error_status, created_at, updated_at, idempotency_key FROM deployments WHERE idempotency_key = $1
+`
+
+func (q *Queries) SelectDeploymentIdKey(ctx context.Context, idempotencyKey uuid.UUID) (Deployment, error) {
+	row := q.db.QueryRow(ctx, selectDeploymentIdKey, idempotencyKey)
 	var i Deployment
 	err := row.Scan(
 		&i.DeploymentID,
@@ -147,6 +185,27 @@ func (q *Queries) SelectUnprocessedMsg(ctx context.Context, limit int32) ([]Sele
 	return items, nil
 }
 
+const updateAsCompleted = `-- name: UpdateAsCompleted :one
+UPDATE deployments SET current_status = 'completed' WHERE deployment_id = $1 AND current_status = 'processing' RETURNING deployment_id, application, version, environment, current_status, last_error_status, created_at, updated_at, idempotency_key
+`
+
+func (q *Queries) UpdateAsCompleted(ctx context.Context, deploymentID uuid.UUID) (Deployment, error) {
+	row := q.db.QueryRow(ctx, updateAsCompleted, deploymentID)
+	var i Deployment
+	err := row.Scan(
+		&i.DeploymentID,
+		&i.Application,
+		&i.Version,
+		&i.Environment,
+		&i.CurrentStatus,
+		&i.LastErrorStatus,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.IdempotencyKey,
+	)
+	return i, err
+}
+
 const updateAsProcessed = `-- name: UpdateAsProcessed :one
 UPDATE outbox SET processed_at = NOW() WHERE deployment_id = $1 RETURNING deployment_id, aggregate_type, aggregate_id, event_type, payload, created_at, processed_at
 `
@@ -162,6 +221,27 @@ func (q *Queries) UpdateAsProcessed(ctx context.Context, deploymentID int64) (Ou
 		&i.Payload,
 		&i.CreatedAt,
 		&i.ProcessedAt,
+	)
+	return i, err
+}
+
+const updateAsProcessing = `-- name: UpdateAsProcessing :one
+UPDATE deployments SET current_status = 'processing' WHERE deployment_id = $1 AND current_status = 'requested' RETURNING deployment_id, application, version, environment, current_status, last_error_status, created_at, updated_at, idempotency_key
+`
+
+func (q *Queries) UpdateAsProcessing(ctx context.Context, deploymentID uuid.UUID) (Deployment, error) {
+	row := q.db.QueryRow(ctx, updateAsProcessing, deploymentID)
+	var i Deployment
+	err := row.Scan(
+		&i.DeploymentID,
+		&i.Application,
+		&i.Version,
+		&i.Environment,
+		&i.CurrentStatus,
+		&i.LastErrorStatus,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.IdempotencyKey,
 	)
 	return i, err
 }

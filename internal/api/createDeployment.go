@@ -110,7 +110,7 @@ func (h *Handler) CreateRequest(ctx context.Context, req DeploymentRequest, idem
 		IdempotencyKey:  idempotencyKey,
 	})
 	if err == sql.ErrNoRows {
-		row, err := h.Queries.SelectDeployment(ctx, idempotencyKey)
+		row, err := h.Queries.SelectDeploymentIdKey(ctx, idempotencyKey)
 		if err != nil {
 			log.Print("This deployment row already exist in the database")
 		}
