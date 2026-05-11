@@ -26,3 +26,6 @@ UPDATE deployments SET current_status = 'completed' WHERE deployment_id = $1 AND
 
 -- name: SelectDeploymentConsumerInfo :one
 SELECT application, version, environment FROM deployments WHERE deployment_id = $1;
+
+-- name: OutboxCleanUp :many
+DELETE FROM outbox WHERE processed_at IS NOT NULL AND processed_at < $1 RETURNING *;

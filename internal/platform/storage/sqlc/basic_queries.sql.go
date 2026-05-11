@@ -87,6 +87,38 @@ func (q *Queries) InsertOutboxRow(ctx context.Context, arg InsertOutboxRowParams
 	return i, err
 }
 
+const outboxCleanUp = `-- name: OutboxCleanUp :many
+DELETE FROM outbox WHERE processed_at IS NOT NULL AND processed_at < $1 RETURNING deployment_id, aggregate_type, aggregate_id, event_type, payload, created_at, processed_at
+`
+
+func (q *Queries) OutboxCleanUp(ctx context.Context, processedAt pgtype.Timestamptz) ([]Outbox, error) {
+	rows, err := q.db.Query(ctx, outboxCleanUp, processedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Outbox
+	for rows.Next() {
+		var i Outbox
+		if err := rows.Scan(
+			&i.DeploymentID,
+			&i.AggregateType,
+			&i.AggregateID,
+			&i.EventType,
+			&i.Payload,
+			&i.CreatedAt,
+			&i.ProcessedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const selectDeploymentConsumerInfo = `-- name: SelectDeploymentConsumerInfo :one
 SELECT application, version, environment FROM deployments WHERE deployment_id = $1
 `
@@ -105,11 +137,11 @@ func (q *Queries) SelectDeploymentConsumerInfo(ctx context.Context, deploymentID
 }
 
 const selectDeploymentDepKey = `-- name: SelectDeploymentDepKey :one
-SELECT deployment_id, application, version, environment, current_status, last_error_status, created_at, updated_at, idempotency_key FROM deployments WHERE idempotency_key = $1
+SELECT deployment_id, application, version, environment, current_status, last_error_status, created_at, updated_at, idempotency_key FROM deployments WHERE deployment_id = $1
 `
 
-func (q *Queries) SelectDeploymentDepKey(ctx context.Context, idempotencyKey uuid.UUID) (Deployment, error) {
-	row := q.db.QueryRow(ctx, selectDeploymentDepKey, idempotencyKey)
+func (q *Queries) SelectDeploymentDepKey(ctx context.Context, deploymentID uuid.UUID) (Deployment, error) {
+	row := q.db.QueryRow(ctx, selectDeploymentDepKey, deploymentID)
 	var i Deployment
 	err := row.Scan(
 		&i.DeploymentID,
