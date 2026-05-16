@@ -44,7 +44,6 @@ func main() {
 		Queries: db.New(dbPool),
 		DB:      dbPool,
 		Dh:      dh,
-		Kafka:   &deployment.Kafka{Client: client},
 	}
 
 	publisher := kafka.NewKafkaPublisher(client)
@@ -70,10 +69,7 @@ func main() {
 	})
 
 	http.HandleFunc("/deployments", func(w http.ResponseWriter, r *http.Request) {
-		_, err := h.CreateDeployment(w, r)
-		if err != nil {
-			log.Printf("Deployment failed: %v", err)
-		}
+		h.CreateDeployment(w, r)
 	})
 
 	log.Fatal(http.ListenAndServe(":8081", nil))

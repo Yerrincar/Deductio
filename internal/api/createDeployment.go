@@ -9,14 +9,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 type DeploymentRequest struct {
@@ -52,15 +50,11 @@ type DeploymentCreatedEvent struct {
 	Version      string
 	Environment  string
 }
-type Kafka struct {
-	Client *kgo.Client
-}
 
 type Handler struct {
 	Queries *db.Queries
 	DB      *pgxpool.Pool
 	Dh      *DeploymentHandler
-	Kafka   *Kafka
 }
 
 func NewHealthHandler() *HealthService {
@@ -149,49 +143,30 @@ func (h *Handler) CreateRequest(ctx context.Context, req DeploymentRequest, idem
 	return deploymentData, nil
 }
 
-func (h *Handler) KafkaProducer(ctx context.Context, req DeploymentRequest, data []byte) error {
-	var wg sync.WaitGroup
-	var errProducer error
-	wg.Add(1)
-	record := &kgo.Record{Topic: "deployments", Value: data}
-	h.Kafka.Client.Produce(ctx, record, func(_ *kgo.Record, err error) {
-		defer wg.Done()
-		if err != nil {
-			log.Printf("record had a produce error: %v\n", err)
-			errProducer = err
-		}
-	})
-	wg.Wait()
-	if errProducer != nil {
-		return errProducer
-	}
-	return nil
-}
-
-func (h *Handler) CreateDeployment(w http.ResponseWriter, r *http.Request) (*DeploymentRequest, error) {
+func (h *Handler) CreateDeployment(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
 	keyHeader := r.Header.Get("X-Idempotency-Key")
 	if keyHeader == "" {
 		http.Error(w, "X-Idempotency-Key header is required", http.StatusBadRequest)
-		return nil, nil
+		return
 	}
 
 	idempotencyKey, err := uuid.Parse(keyHeader)
 	if err != nil {
 		http.Error(w, "Invalid IdempotencyKey format", http.StatusBadRequest)
-		return nil, err
+		return
 	}
 
 	if !h.Dh.Health.IsSystemReady() {
 		http.Error(w, "Deployment tool is unavailable", http.StatusServiceUnavailable)
-		return nil, nil
+		return
 	}
 
 	if r.Method != "POST" {
 		http.Error(w, "Only POST request allowed", http.StatusMethodNotAllowed)
-		return nil, nil
+		return
 	}
 
 	var req DeploymentRequest
@@ -200,21 +175,20 @@ func (h *Handler) CreateDeployment(w http.ResponseWriter, r *http.Request) (*Dep
 
 	if err := dec.Decode(&req); err != nil {
 		http.Error(w, "Error decoding the request", http.StatusBadRequest)
-		return nil, err
+		return
 	}
 	if req.Application == "" || req.Version == "" || req.Environment == "" {
 		http.Error(w, "Error decoding the request", http.StatusBadRequest)
-		return nil, nil
+		return
 	}
 	response, err := h.CreateRequest(ctx, req, idempotencyKey)
 	if err != nil {
 		http.Error(w, "Failed to create deployment", http.StatusInternalServerError)
-		return nil, err
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Idempotency-Key", keyHeader)
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(response)
-	return &req, nil
 }
