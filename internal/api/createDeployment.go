@@ -46,9 +46,9 @@ type DeploymentHandler struct {
 
 type DeploymentCreatedEvent struct {
 	DeploymentID uuid.UUID `json:"deployment_id"`
-	Application  string `json:"application"`
-	Version      string `json:"version"`
-	Environment  string `json:"environment"`
+	Application  string    `json:"application"`
+	Version      string    `json:"version"`
+	Environment  string    `json:"environment"`
 }
 
 type Handler struct {
